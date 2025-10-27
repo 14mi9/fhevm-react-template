@@ -1,11 +1,13 @@
 import { openDB, DBSchema, IDBPDatabase } from "idb";
+import { createInMemoryStorage } from "./InMemoryStorage";
+import type { FhevmStorageProvider, FhevmStorageReadResult } from "./types";
 
-type FhevmStoredPublicKey = {
+export type FhevmStoredPublicKey = {
   publicKeyId: string;
   publicKey: Uint8Array;
 };
 
-type FhevmStoredPublicParams = {
+export type FhevmStoredPublicParams = {
   publicParamsId: string;
   publicParams: Uint8Array;
 };
@@ -52,17 +54,18 @@ async function getDB(): Promise<IDBPDatabase<PublicParamsDB> | undefined> {
   return dbPromise;
 }
 
-type FhevmInstanceConfigPublicKey = {
-  data: Uint8Array | null;
-  id: string | null;
-};
-
-type FhevmInstanceConfigPublicParams = {
-  "2048": {
-    publicParamsId: string;
-    publicParams: Uint8Array;
-  };
-};
+function normalizeToUint8Array(data: unknown): Uint8Array {
+  if (data instanceof Uint8Array) {
+    return data;
+  }
+  if (data instanceof ArrayBuffer) {
+    return new Uint8Array(data);
+  }
+  if (Array.isArray(data)) {
+    return Uint8Array.from(data);
+  }
+  throw new Error("Value must be convertible to Uint8Array");
+}
 
 function assertPublicKey(
   value: unknown
@@ -82,9 +85,11 @@ function assertPublicKey(
   if (!("publicKey" in value)) {
     throw new Error("FhevmStoredPublicKey.publicKey does not exist");
   }
-  if (!(value.publicKey instanceof Uint8Array)) {
-    throw new Error("FhevmStoredPublicKey.publicKey must be a Uint8Array");
-  }
+
+  const normalized = normalizeToUint8Array(
+    (value as { publicKey: unknown }).publicKey
+  );
+  (value as { publicKey: Uint8Array }).publicKey = normalized;
 }
 
 function assertPublicParams(
@@ -105,42 +110,17 @@ function assertPublicParams(
   if (!("publicParams" in value)) {
     throw new Error("FhevmStoredPublicParams.publicParams does not exist");
   }
-  if (!(value.publicParams instanceof Uint8Array)) {
-    throw new Error("FhevmStoredPublicParams.publicParams must be a Uint8Array");
-  }
+
+  const normalized = normalizeToUint8Array(
+    (value as { publicParams: unknown }).publicParams
+  );
+  (value as { publicParams: Uint8Array }).publicParams = normalized;
 }
 
-export async function publicKeyStorageGet(aclAddress: `0x${string}`): Promise<{
-  publicKey?: FhevmInstanceConfigPublicKey;
-  publicParams: FhevmInstanceConfigPublicParams | null;
-}> {
-  const db = await getDB();
-  if (!db) {
-    return { publicParams: null };
-  }
-
-  let storedPublicKey: FhevmStoredPublicKey | null = null;
-  try {
-    const pk = await db.get("publicKeyStore", aclAddress);
-    if (pk?.value) {
-      assertPublicKey(pk.value);
-      storedPublicKey = pk.value;
-    }
-  } catch {
-    // ignore corrupted entry
-  }
-
-  let storedPublicParams: FhevmStoredPublicParams | null = null;
-  try {
-    const pp = await db.get("paramsStore", aclAddress);
-    if (pp?.value) {
-      assertPublicParams(pp.value);
-      storedPublicParams = pp.value;
-    }
-  } catch {
-    // ignore corrupted entry
-  }
-
+function buildReadResult(
+  storedPublicKey: FhevmStoredPublicKey | null,
+  storedPublicParams: FhevmStoredPublicParams | null
+): FhevmStorageReadResult {
   const publicKeyData = storedPublicKey?.publicKey;
   const publicKeyId = storedPublicKey?.publicKeyId;
   const publicParams = storedPublicParams
@@ -149,7 +129,7 @@ export async function publicKeyStorageGet(aclAddress: `0x${string}`): Promise<{
       }
     : null;
 
-  let publicKey: FhevmInstanceConfigPublicKey | undefined;
+  let publicKey: FhevmStorageReadResult["publicKey"];
 
   if (publicKeyId && publicKeyData) {
     publicKey = {
@@ -164,24 +144,73 @@ export async function publicKeyStorageGet(aclAddress: `0x${string}`): Promise<{
   };
 }
 
+export function createBrowserStorage(): FhevmStorageProvider {
+  const fallback = createInMemoryStorage();
+  return {
+    async get(aclAddress: `0x${string}`) {
+      const db = await getDB();
+      if (!db) {
+        return fallback.get(aclAddress);
+      }
+
+      let storedPublicKey: FhevmStoredPublicKey | null = null;
+      try {
+        const pk = await db.get("publicKeyStore", aclAddress);
+        if (pk?.value) {
+          assertPublicKey(pk.value);
+          storedPublicKey = pk.value;
+        }
+      } catch {
+        // ignore corrupted entry
+      }
+
+      let storedPublicParams: FhevmStoredPublicParams | null = null;
+      try {
+        const pp = await db.get("paramsStore", aclAddress);
+        if (pp?.value) {
+          assertPublicParams(pp.value);
+          storedPublicParams = pp.value;
+        }
+      } catch {
+        // ignore corrupted entry
+      }
+
+      return buildReadResult(storedPublicKey, storedPublicParams);
+    },
+    async set(
+      aclAddress: `0x${string}`,
+      publicKey: FhevmStoredPublicKey | null,
+      publicParams: FhevmStoredPublicParams | null
+    ) {
+      assertPublicKey(publicKey);
+      assertPublicParams(publicParams);
+
+      const db = await getDB();
+      if (!db) {
+        return fallback.set(aclAddress, publicKey, publicParams);
+      }
+
+      if (publicKey) {
+        await db.put("publicKeyStore", { acl: aclAddress, value: publicKey });
+      }
+
+      if (publicParams) {
+        await db.put("paramsStore", { acl: aclAddress, value: publicParams });
+      }
+    },
+  };
+}
+
+const browserStorage = createBrowserStorage();
+
+export async function publicKeyStorageGet(aclAddress: `0x${string}`) {
+  return browserStorage.get(aclAddress);
+}
+
 export async function publicKeyStorageSet(
   aclAddress: `0x${string}`,
   publicKey: FhevmStoredPublicKey | null,
   publicParams: FhevmStoredPublicParams | null
 ) {
-  assertPublicKey(publicKey);
-  assertPublicParams(publicParams);
-
-  const db = await getDB();
-  if (!db) {
-    return;
-  }
-
-  if (publicKey) {
-    await db.put("publicKeyStore", { acl: aclAddress, value: publicKey });
-  }
-
-  if (publicParams) {
-    await db.put("paramsStore", { acl: aclAddress, value: publicParams });
-  }
+  return browserStorage.set(aclAddress, publicKey, publicParams);
 }

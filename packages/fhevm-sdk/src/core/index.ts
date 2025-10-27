@@ -2,6 +2,8 @@ export * from "./client/FhevmClient";
 export * from "./client/RelayerSDKLoader";
 export * from "./errors/FhevmError";
 export * from "./storage/PublicKeyStorage";
+export * from "./storage/InMemoryStorage";
+export * from "./storage/types";
 export * from "./types/status";
 export * from "./types/relayer";
 export * from "./utils/address";

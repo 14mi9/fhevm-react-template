@@ -1,9 +1,8 @@
 import type { Eip1193Provider } from "ethers";
 import { FhevmInstance, FhevmInstanceConfig } from "../../fhevmTypes";
-import {
-  publicKeyStorageGet,
-  publicKeyStorageSet,
-} from "../storage/PublicKeyStorage";
+import { createBrowserStorage } from "../storage/PublicKeyStorage";
+import { createInMemoryStorage } from "../storage/InMemoryStorage";
+import type { FhevmStorageProvider } from "../storage/types";
 import { RelayerSDKLoader, isFhevmWindow } from "./RelayerSDKLoader";
 import {
   FhevmAbortError,
@@ -29,23 +28,18 @@ export type CreateFhevmInstanceParams = {
   initOptions?: FhevmInitSDKOptions;
 };
 
-type StorageAdapter = {
-  get: typeof publicKeyStorageGet;
-  set: typeof publicKeyStorageSet;
-};
-
 type Dependencies = {
   createLoader: () => RelayerSDKLoader;
-  storage: StorageAdapter;
+  storage: FhevmStorageProvider;
   getWindow: () => Window & typeof globalThis;
 };
 
 const defaultDependencies: Dependencies = {
   createLoader: () => new RelayerSDKLoader({ trace: console.log }),
-  storage: {
-    get: publicKeyStorageGet,
-    set: publicKeyStorageSet,
-  },
+  storage:
+    typeof window === "undefined"
+      ? createInMemoryStorage()
+      : createBrowserStorage(),
   getWindow: () => window,
 };
 
@@ -99,8 +93,7 @@ export class FhevmClient {
       throw new FhevmError("INVALID_ACL_ADDRESS", `Invalid address: ${aclAddress}`);
     }
 
-    const { get, set } = this.deps.storage;
-    const publicKeyCache = await get(aclAddress);
+    const publicKeyCache = await this.deps.storage.get(aclAddress);
     this.ensureNotAborted(signal);
 
     const config: FhevmInstanceConfig = {
@@ -114,7 +107,7 @@ export class FhevmClient {
 
     const instance = await relayerSDK.createInstance(config);
 
-    await set(
+    await this.deps.storage.set(
       aclAddress,
       instance.getPublicKey(),
       instance.getPublicParams(2048)

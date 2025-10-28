@@ -1,128 +1,125 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { FhevmInstance } from "../fhevmTypes.js";
-import { createFhevmInstance } from "../internal/fhevm.js";
-import { ethers } from "ethers";
-
-function _assert(condition: boolean, message?: string): asserts condition {
-  if (!condition) {
-    const m = message ? `Assertion failed: ${message}` : `Assertion failed.`;
-    throw new Error(m);
-  }
-}
+import { FhevmClient } from "../core/client/FhevmClient";
+import type { FhevmRelayerStatus } from "../core/types/status";
+import type { FhevmInitSDKOptions } from "../core/types/relayer";
+import type { FhevmStorageProvider } from "../core/storage/types";
+import type { Eip1193Provider } from "ethers";
 
 export type FhevmGoState = "idle" | "loading" | "ready" | "error";
 
-export function useFhevm(parameters: {
-  provider: string | ethers.Eip1193Provider | undefined;
-  chainId: number | undefined;
+type ProviderInput = string | Eip1193Provider | undefined;
+
+export type UseFhevmOptions = {
+  provider: ProviderInput;
+  chainId?: number;
   enabled?: boolean;
   initialMockChains?: Readonly<Record<number, string>>;
-}): {
+  mockChains?: Readonly<Record<number, string>>;
+  initOptions?: FhevmInitSDKOptions;
+  storage?: FhevmStorageProvider;
+  client?: FhevmClient;
+  onStatusChange?: (status: FhevmRelayerStatus) => void;
+};
+
+type UseFhevmResult = {
   instance: FhevmInstance | undefined;
   refresh: () => void;
   error: Error | undefined;
   status: FhevmGoState;
-} {
-  const { provider, chainId, initialMockChains, enabled = true } = parameters;
+};
 
-  const [instance, _setInstance] = useState<FhevmInstance | undefined>(undefined);
-  const [status, _setStatus] = useState<FhevmGoState>("idle");
-  const [error, _setError] = useState<Error | undefined>(undefined);
-  const [_isRunning, _setIsRunning] = useState<boolean>(enabled);
-  const [_providerChanged, _setProviderChanged] = useState<number>(0);
-  const _abortControllerRef = useRef<AbortController | null>(null);
-  const _providerRef = useRef<string | ethers.Eip1193Provider | undefined>(provider);
-  const _chainIdRef = useRef<number | undefined>(chainId);
-  const _mockChainsRef = useRef<Record<number, string> | undefined>(initialMockChains as any);
+export function useFhevm(options: UseFhevmOptions): UseFhevmResult {
+  const {
+    provider,
+    enabled = true,
+    mockChains,
+    initialMockChains,
+    initOptions,
+    storage,
+    client: clientOverride,
+    onStatusChange,
+  } = options;
+
+  const resolvedMockChains = mockChains ?? initialMockChains;
+
+  const client = useMemo(() => {
+    if (clientOverride) {
+      return clientOverride;
+    }
+    if (storage) {
+      return new FhevmClient({ storage });
+    }
+    return new FhevmClient();
+  }, [clientOverride, storage]);
+
+  const [instance, setInstance] = useState<FhevmInstance | undefined>(undefined);
+  const [status, setStatus] = useState<FhevmGoState>("idle");
+  const [error, setError] = useState<Error | undefined>(undefined);
+  const [refreshToken, setRefreshToken] = useState(0);
+
+  const abortRef = useRef<AbortController | null>(null);
 
   const refresh = useCallback(() => {
-    if (_abortControllerRef.current) {
-      _providerRef.current = undefined;
-      _chainIdRef.current = undefined;
-
-      _abortControllerRef.current.abort();
-      _abortControllerRef.current = null;
-    }
-
-    _providerRef.current = provider;
-    _chainIdRef.current = chainId;
-
-    _setInstance(undefined);
-    _setError(undefined);
-    _setStatus("idle");
-
-    if (provider !== undefined) {
-      _setProviderChanged(prev => prev + 1);
-    }
-  }, [provider, chainId]);
+    setInstance(undefined);
+    setError(undefined);
+    setStatus("idle");
+    setRefreshToken(prev => prev + 1);
+  }, []);
 
   useEffect(() => {
-    refresh();
-  }, [refresh]);
-
-  useEffect(() => {
-    _setIsRunning(enabled);
-  }, [enabled]);
-
-  useEffect(() => {
-    if (_isRunning === false) {
-      if (_abortControllerRef.current) {
-        _abortControllerRef.current.abort();
-        _abortControllerRef.current = null;
-      }
-      _setInstance(undefined);
-      _setError(undefined);
-      _setStatus("idle");
+    if (!enabled || provider === undefined) {
+      abortRef.current?.abort();
+      abortRef.current = null;
+      setInstance(undefined);
+      setStatus("idle");
+      setError(undefined);
       return;
     }
 
-    if (_isRunning === true) {
-      if (_providerRef.current === undefined) {
-        _setInstance(undefined);
-        _setError(undefined);
-        _setStatus("idle");
+    const controller = new AbortController();
+    abortRef.current?.abort();
+    abortRef.current = controller;
+
+    setStatus("loading");
+    setError(undefined);
+
+    const handleStatus = (s: FhevmRelayerStatus) => {
+      onStatusChange?.(s);
+      if (controller.signal.aborted) {
         return;
       }
+      setStatus("loading");
+    };
 
-      if (!_abortControllerRef.current) {
-        _abortControllerRef.current = new AbortController();
-      }
-
-      _assert(!_abortControllerRef.current.signal.aborted, "!controllerRef.current.signal.aborted");
-
-      _setStatus("loading");
-      _setError(undefined);
-
-      const thisSignal = _abortControllerRef.current.signal;
-      const thisProvider = _providerRef.current;
-      const thisRpcUrlsByChainId = _mockChainsRef.current as any;
-
-      createFhevmInstance({
-        signal: thisSignal,
-        provider: thisProvider as any,
-        mockChains: thisRpcUrlsByChainId as any,
-        onStatusChange: s => console.log(`[useFhevm] createFhevmInstance status changed: ${s}`),
+    client
+      .createInstance({
+        provider,
+        signal: controller.signal,
+        mockChains: resolvedMockChains as Record<number, string> | undefined,
+        onStatusChange: handleStatus,
+        initOptions,
       })
-        .then(i => {
-          if (thisSignal.aborted) return;
-          _assert(thisProvider === _providerRef.current, "thisProvider === _providerRef.current");
+      .then(result => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setInstance(result);
+        setStatus("ready");
+      })
+      .catch(err => {
+        if (controller.signal.aborted) {
+          return;
+        }
+        setInstance(undefined);
+        setError(err as Error);
+        setStatus("error");
+      });
 
-          _setInstance(i);
-          _setError(undefined);
-          _setStatus("ready");
-        })
-        .catch(e => {
-          if (thisSignal.aborted) return;
-
-          _assert(thisProvider === _providerRef.current, "thisProvider === _providerRef.current");
-
-          _setInstance(undefined);
-          _setError(e as any);
-          _setStatus("error");
-        });
-    }
-  }, [_isRunning, _providerChanged]);
+    return () => {
+      controller.abort();
+    };
+  }, [client, provider, enabled, resolvedMockChains, initOptions, onStatusChange, refreshToken]);
 
   return { instance, refresh, error, status };
 }
-

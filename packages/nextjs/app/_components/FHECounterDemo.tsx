@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useFhevm } from "@fhevm-sdk";
+import type { FhevmRelayerStatus } from "@fhevm-sdk";
 import { useAccount } from "wagmi";
 import { RainbowKitCustomConnectButton } from "~~/components/helper/RainbowKitCustomConnectButton";
 import { useFHECounterWagmi } from "~~/hooks/fhecounter-example/useFHECounterWagmi";
@@ -16,6 +17,7 @@ export const FHECounterDemo = () => {
   const { isConnected, chain } = useAccount();
 
   const chainId = chain?.id;
+  const mockChains = useMemo(() => ({ 31337: "http://localhost:8545" }), []);
 
   //////////////////////////////////////////////////////////////////////////////
   // FHEVM instance
@@ -29,17 +31,25 @@ export const FHECounterDemo = () => {
     return (window as any).ethereum;
   }, []);
 
-  const initialMockChains = { 31337: "http://localhost:8545" };
+  const [relayerStatuses, setRelayerStatuses] = useState<FhevmRelayerStatus[]>([]);
+  const handleStatusChange = useCallback((status: FhevmRelayerStatus) => {
+    setRelayerStatuses(prev => {
+      const next = [...prev, status];
+      return next.slice(-6);
+    });
+  }, []);
 
   const {
     instance: fhevmInstance,
     status: fhevmStatus,
     error: fhevmError,
+    refresh: refreshFhevm,
   } = useFhevm({
     provider,
     chainId,
-    initialMockChains,
-    enabled: true, // use enabled to dynamically create the instance on-demand
+    mockChains,
+    enabled: Boolean(provider && isConnected), // only initialize when wallet is available
+    onStatusChange: handleStatusChange,
   });
 
   //////////////////////////////////////////////////////////////////////////////
@@ -51,7 +61,7 @@ export const FHECounterDemo = () => {
 
   const fheCounter = useFHECounterWagmi({
     instance: fhevmInstance,
-    initialMockChains,
+    mockChains,
   });
 
   //////////////////////////////////////////////////////////////////////////////
@@ -184,7 +194,28 @@ export const FHECounterDemo = () => {
           <div className="space-y-3">
             {printProperty("Instance Status", fhevmInstance ? "✅ Connected" : "❌ Disconnected")}
             {printProperty("Status", fhevmStatus)}
-            {printProperty("Error", fhevmError ?? "No errors")}
+            {fhevmError
+              ? printProperty("Error", fhevmError)
+              : printProperty("Error", "No errors")}
+            {relayerStatuses.length > 0 && (
+              <div className="flex flex-wrap gap-2">
+                {relayerStatuses.map((status, index) => (
+                  <span
+                    key={`${status}-${index}`}
+                    className="text-xs font-semibold bg-gray-200 text-gray-800 rounded px-2 py-1 border border-gray-300"
+                  >
+                    {status}
+                  </span>
+                ))}
+              </div>
+            )}
+            <button
+              className={`${secondaryButtonClass} !px-4 !py-2 !text-sm`}
+              type="button"
+              onClick={refreshFhevm}
+            >
+              🔄 Refresh FHEVM
+            </button>
           </div>
         </div>
 

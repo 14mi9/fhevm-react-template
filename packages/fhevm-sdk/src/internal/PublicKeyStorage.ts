@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 import { openDB, DBSchema, IDBPDatabase } from "idb";
 
 type FhevmStoredPublicKey = {
@@ -184,3 +185,9 @@ export async function publicKeyStorageSet(
     await db.put("paramsStore", { acl: aclAddress, value: publicParams });
   }
 }
+=======
+export {
+  publicKeyStorageGet,
+  publicKeyStorageSet,
+} from "../core/storage/PublicKeyStorage";
+>>>>>>> refactor-fhevm-sdk

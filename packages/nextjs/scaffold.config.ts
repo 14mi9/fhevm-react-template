@@ -16,14 +16,13 @@ if (!rawAlchemyKey) {
   if (process.env.NODE_ENV === "production") {
     throw new Error("Environment variable NEXT_PUBLIC_ALCHEMY_API_KEY is required in production.");
   } else {
-    // eslint-disable-next-line no-console
     console.warn("NEXT_PUBLIC_ALCHEMY_API_KEY is not set. Falling back to public RPCs.");
   }
 }
 
 const scaffoldConfig = {
   // The networks on which your DApp is live
-  targetNetworks: [chains.hardhat, chains.sepolia],
+  targetNetworks: [chains.sepolia],
   // The interval at which your front-end polls the RPC servers for new data (it has no effect if you only target the local network (default is 4000))
   pollingInterval: 30000,
   // This is ours Alchemy's default API key.
